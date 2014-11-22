@@ -9,25 +9,29 @@ int main(int argc, char** argv){
   //define pool of clients
   static client_pool pool_clients;
   //define client address
-  struct sockaddr client_addr;
+  struct sockaddr_in client_addr;
+  socklen_t cli_size;
   //specify the arguments:
-  char* log;
+  char* log_name;
   float alpha;
-  int listen_port;
+  char* listen_port;
   char* fake_ip;
-  char* DNS_ip;
-  int DNS_port;
+  //  char* DNS_ip;
+  // int DNS_port;
   char* www_ip;
-  log = argv[1];
+  log_name = argv[1];
   alpha = atof(argv[2]);
-  listen_port = atoi(argv[3]);
+  listen_port = argv[3];
   fake_ip = argv[4];
-  DNS_ip = argv[5];
-  www_ip = argv[6];
+  // DNS_ip = argv[5];
+  //DNS_port= argv[6]
+  www_ip = argv[7];
   time_t epoch;
   time(&epoch);
   int browser_socket = connect_browser(listen_port);
-  init_client_pool(browser_socket, pool_clients);
+  init_client_pool(browser_socket, &pool_clients);
+  //initialize client_fd
+  int client_fd;
   while(1){
     pool_clients.read_readys = pool_clients.read_set;
     pool_clients.read_num_ready = select(pool_clients.fd_max + 1,
@@ -40,16 +44,17 @@ int main(int argc, char** argv){
     }
     //accept incoming connections from browser
     if(FD_ISSET(browser_socket, &(pool_clients.read_readys))){
-      if((client_fd = accept(browser_socket, &client_addr, 
-			     &(sizeof(client_addr)))) == -1){
+      cli_size = sizeof(client_addr);
+      if((client_fd = accept(browser_socket, (struct sockaddr*) &client_addr, 
+			     &cli_size)) == -1){
 	close(browser_socket);
-	fprintf(stder, "error in accepting incoming connections\n");
+	fprintf(stderr, "error in accepting incoming connections\n");
 	return EXIT_FAILURE;
       }
       connectClient_add(client_fd, &pool_clients);
     }
-    handle_client_request(pool_clients, browser_socket,
-			  www_ip, fake_ip, alpha, epoch);
+    handle_client_request(&pool_clients, browser_socket,
+			  www_ip, fake_ip, alpha, epoch, log_name);
   }
   free_clients(&pool_clients);
   close_socket(browser_socket);
@@ -66,28 +71,26 @@ read_io* init_read_io(char* given_content){
 void free_reader(read_io* reader){
   free(reader);
 }
-
-//helper function to read one line from the input buffer
-char* read_one_line(read_io* reader){
+//helper function to read one line
+void read_one_line(read_io* reader, char* one_line){
   int num_characters = 0;
   char* bufptr = reader->buf;
   while((*bufptr) != '\r'){
     num_characters = num_characters + 1;
     bufptr = bufptr + 1;
   }
-  char one_line[num_characters + 3];
+  num_characters = num_characters + 3;
   memcpy(one_line, reader->buf, num_characters);
   one_line[num_characters] = '\r';
   one_line[num_characters + 1] = '\n';
-  one_line[num_characters + 2] = NULL;
+  one_line[num_characters + 2] = '\0';
   reader->buf = bufptr + 2;
-  return one_line;
 }
 
 //helper function to get the requested chunk length
 int get_chunk_length(char* line){
-  char* header_name;
-  char* length;
+  char header_name[MAX_LINE];
+  char length[MAX_LINE];
   sscanf(line, "%s %s", header_name, length);
   int index;
   int num_digits = 0;
@@ -99,44 +102,41 @@ int get_chunk_length(char* line){
   }
   char num[num_digits + 1];
   strncpy(num, length, num_digits);
-  num[num_digits] = NULL;
+  num[num_digits] = '\0';
   int result = atoi(num);
   return result;
 }
 
 //helper function to chnage "xx.f4m get request" to "xx_nolist.f4m get request"
 
-char* get_path_f4m_nolist(char* f4m_path){
-  int new_length = strlen(f4m_path) + NO_LIST_SIZE;
-  char new_request[new_length + 1];
+void get_path_f4m_nolist(char* f4m_path, char* new_request){
   strcpy(new_request, f4m_path);
   char* f4mptr = strstr(new_request, ".f4m");
   strcpy(f4mptr, "_nolist.f4m");
-  return new_request;
 }
 
 //helper function to change the bit rate
 void update_bitrate_chunk_request(char* chunk_path, int new_bitrate){
   int length = strlen(chunk_path);
-  char* ptr1 = chunk_path[length - 1];
+  char* ptr1 = &(chunk_path[length - 1]);
   char* ptr2 = strstr(chunk_path, "Seq");
   while(ptr1[0] != '/'){
     ptr1 = ptr1 - 1;
   }
   ptr1 = ptr1 + 1;
   int num_suffix = 0;
-  while(ptr2[0] != NULL){
+  while(ptr2[0] != '\0'){
     ptr2 = ptr2 + 1;
     num_suffix++;
   }
   char suffix_store[num_suffix + 1];
   strncpy(suffix_store, strstr(chunk_path, "Seq"), num_suffix);
-  suffix_store[num_suffix] = NULL;
+  suffix_store[num_suffix] = '\0';
   //convert the bit rate into a string
   char str[15];
   sprintf(str, "%d", new_bitrate);
-  strcat(new_bitrate, suffix_store);
-  strcpy(ptr1, new_bitrate);
+  strcat(str, suffix_store);
+  strcpy(ptr1, str);
 }
 
 
@@ -145,7 +145,7 @@ int get_hostname_len(char* uri){
   int index = 0;
   int count = 0;
   int count_slash = 0;
-  while(uri[index] != NULL){
+  while(uri[index] != '\0'){
     if(uri[index] == '/'){
       count_slash = count_slash + 1;
      }
@@ -171,12 +171,12 @@ void get_host_name(char* hostname_raw, char* hostname){
   len_prefix = len_prefix + 2;
   index = len_prefix;
   int count = 0;
-  while(hostname_raw[index] != NULL){
+  while(hostname_raw[index] != '\0'){
     hostname[index - len_prefix] = hostname_raw[index];
     index++;
     count++;
   }
-  hostname[count] = NULL;
+  hostname[count] = '\0';
 }
 
 //helper function to remove the port number field 
@@ -186,7 +186,7 @@ void remove_port_field(char* hostname){
     index = index + 1;
   }
   //manually add the null terminator
-  hostname[index] = NULL;
+  hostname[index] = '\0';
 }
 
 //function to parse the uri to obtain server port and hostname
@@ -194,12 +194,12 @@ void parse_request_port_hostname(char* uri, char* hostname,
 			         char* request_content,
 				 int* server_port){
   //define raw hostname
-  char hostname_raw[MAXLINE];
+  char hostname_raw[MAX_LINE];
   //parse the uri for host name
   int len_hostname = get_hostname_len(uri);
-  assert(len_hostname < MAXLINE);
+  assert(len_hostname < MAX_LINE);
   strncpy(hostname_raw, uri, len_hostname);
-  hostname_raw[len_hostname] = NULL;
+  hostname_raw[len_hostname] = '\0';
   //delete the http:// or https:// prefix
   get_host_name(hostname_raw, hostname);
 
@@ -217,7 +217,7 @@ void parse_request_port_hostname(char* uri, char* hostname,
   strcpy(request_content, uri + len_hostname);
   if(request_content[0] != '/'){
     request_content[0] = '/';
-    request_content[1] = NULL;
+    request_content[1] = '\0';
   }
 }
 
@@ -245,7 +245,7 @@ char* read_response_from_server(int server_socket, char* buf,  int* count){
   int bytes_rec = 0;
   ssize_t read_bytes;
   int mycount = *count;
-  while((read_bytes = recv(conn_fd, buf + bytes_rec, 
+  while((read_bytes = recv(server_socket, buf + bytes_rec, 
 			   ((BUF_SIZE * mycount) - bytes_rec),
 			   MSG_DONTWAIT)) >= 1){
     bytes_rec += read_bytes;
@@ -262,9 +262,10 @@ char* read_response_from_server(int server_socket, char* buf,  int* count){
     }
   }
   //padd the null terminator
-  if(buf[bytes_rec] != NULL){
-    buf[bytes_rec] = NULL;
+  if(buf[bytes_rec] != '\0'){
+    buf[bytes_rec] = '\0';
   }
+  //update count
   *count = mycount;
  //encounter error from reading client input
   if ((read_bytes == -1) && (errno != EAGAIN) && (errno != EWOULDBLOCK)){
@@ -278,7 +279,7 @@ char* read_response_from_server(int server_socket, char* buf,  int* count){
     if (close_socket(server_socket)){
       free(buf);
       fprintf(stderr, "Error closing server socket.\n");
-      return NULL
+      return NULL;
     }
   }
   return buf;
@@ -309,8 +310,8 @@ char* read_request_from_fd(client_pool* pool,
     }
   }
   //padd the null terminator
-  if(buf[bytes_rec] != NULL){
-    buf[bytes_rec] = NULL;
+  if(buf[bytes_rec] != '\0'){
+    buf[bytes_rec] = '\0';
   }
   //update count
   *count = mycount;
@@ -331,7 +332,7 @@ char* read_request_from_fd(client_pool* pool,
       close_socket(browser_socket);
       free(buf);
       fprintf(stderr, "Error closing client socket.\n");
-      return NULL
+      return NULL;
     }
   }
   return buf;
@@ -356,7 +357,7 @@ int get_header(char* buf, char* header){
   if(strchr(buf, ':') != NULL){
     size_t len = (strchr(buf, ':') - buf);
     memcpy(header, buf, len);
-    header[len] = NULL;
+    header[len] = '\0';
     return 1;
   }
   else{
@@ -368,7 +369,7 @@ int get_header(char* buf, char* header){
 //to indicate whether any header has been found or not
 void get_request_header(int* header_indicators, char* buf,
 			char* request_header){
-  char header[MAXLINE];
+  char header[MAX_LINE];
   int has_header = get_header(buf, header);
   if(has_header == 1){
     if(strcmp("Host", header) == 0){
@@ -401,7 +402,7 @@ void get_request_header(int* header_indicators, char* buf,
 //fill the header fields
 void refill_miss_header(int* header_indicators, char* request_header,
 			char* hostname){
-  char header_buf[MAXLINE];
+  char header_buf[MAX_LINE];
   memset(header_buf, 0, sizeof(header_buf));
   if(header_indicators[index_host] == 0){
     strcat(header_buf, "Host: ");
@@ -452,7 +453,7 @@ void parseMedia(client* myclient, xmlDocPtr doc, xmlNodePtr node){
   while(node != NULL){
     if((!xmlStrcmp(node->name, (const xmlChar*)("bitrate")))){
       key = xmlNodeListGetString(doc, node->xmlChildrenNode, 1);
-      int bitrate = atoi(key);
+      int bitrate = atoi((char*)key);
       xmlFree(key);
       //store the bit rate to the client
       if((myclient->num_bitrate_options) < (myclient->bitrate_capacity)){
@@ -462,19 +463,20 @@ void parseMedia(client* myclient, xmlDocPtr doc, xmlNodePtr node){
 	myclient->num_bitrate_options++;
       }
       else{
-	int* temp = malloc((myclient->bitrate_capacity) * sizeof(int));
-	memcpy(temp, myclient->bitrates);
+	size_t num_bytes = (myclient->bitrate_capacity) * sizeof(int);
+	int* temp = malloc(num_bytes);
+	memcpy(temp, myclient->bitrates, num_bytes);
 	free(myclient->bitrates);
 	myclient->bitrate_capacity = myclient->bitrate_capacity + START_SIZE;
 	myclient->bitrates = malloc(
 				    (myclient->bitrate_capacity) * 
 				    sizeof(int));
-	memcpy(myclient->bitrates, temp);
+	memcpy(myclient->bitrates, temp, num_bytes);
 	free(temp);
 	int index = myclient->next_index_to_use;
 	(myclient->bitrates)[index] = bitrate;
-	myclient->next_index_to_use++;
-	myclient->num_bitrate_options++;
+	(myclient->next_index_to_use)++;
+	(myclient->num_bitrate_options)++;
       }
     }
     node = node->next;
@@ -489,7 +491,7 @@ int get_lowest_bit_rate(client* myclient){
   for(index = 0; index < myclient->next_index_to_use; index ++){
     int element = integer_array[index];
     if(element < min){
-      min = element
+      min = element;
     }
   }
   return min;
@@ -498,13 +500,15 @@ int get_lowest_bit_rate(client* myclient){
 //helper function to reset fields of a client when it requests f4m file
 void reset_client(client* myclient){
   myclient->num_bitrate_options = 0;
+  int total = myclient->bitrate_capacity;
   myclient->bitrate_capacity = START_SIZE;
   myclient->throughput = 0.0;
   myclient->current_bitrate = -1;
   myclient->next_index_to_use = 0;
   free(myclient->bitrates);
   myclient->bitrates = malloc(START_SIZE * sizeof(int));
-  for(index = 0; index < START_SIZE; index++){
+  int index;
+  for(index = 0; index < total; index++){
     (myclient->bitrates)[index] = -1;
   }
 }
@@ -529,8 +533,8 @@ int get_best_bitrate(client* myclient, double throughput){
 
 //helper function to initiate the log file
 int initLogFile(char* logFileName){
-  log = fopen(logFileName, "w");
-  if(log == NULL){
+  mylog = fopen(logFileName, "w");
+  if(mylog == NULL){
     return -1;
   }
   else{
@@ -542,23 +546,24 @@ int initLogFile(char* logFileName){
 void logger(const char* format, ...){
   va_list args;
   va_start(args, format);
-  vfprintf(log, format, args);
-  fflush(log);
+  vfprintf(mylog, format, args);
+  fflush(mylog);
   va_end(args);
 }
 
 //helper function to handle incoming client requests
 void handle_client_request(client_pool* pool, int browser_socket,
-			   char* ip, char* fake_ip, float alpha, time_t epoch){
+			   char* ip, char* fake_ip, float alpha, time_t epoch,
+			   char* log_name){
   int itr = 0;
   int conn_fd;
  
   //initiate log file
-  if(initLogFile("logFile") == -1){
+  if(initLogFile("log_name") == -1){
     fprintf(stderr, "log file fails to create\n");
     exit(EXIT_FAILURE);
   }
-  while((itr <= (pool->read_index_max)) && ((pool->read_num_readys) > 0)){
+  while((itr <= (pool->read_index_max)) && ((pool->read_num_ready) > 0)){
     conn_fd = ((pool->clients)[itr])->client_fd;
     if((conn_fd > 0) && (FD_ISSET(conn_fd, &(pool->read_readys)))){
       char* buf = malloc(BUF_SIZE);
@@ -573,7 +578,8 @@ void handle_client_request(client_pool* pool, int browser_socket,
       //parse the client input
       int header_indicators[5] = {0, 0, 0, 0, 0};
       read_io* reader = init_read_io(buf);
-      char* line = read_one_line(reader);
+      char line[MAX_LINE];
+      read_one_line(reader, line);
       char method[MAX_LINE];
       char uri[MAX_LINE];
       char version[MAX_LINE];
@@ -586,12 +592,12 @@ void handle_client_request(client_pool* pool, int browser_socket,
       parse_request_port_hostname(uri, hostname, content_path,
 				  &server_port);
       first_request_line_combine(method, content_path,
-				 version, request_content)
+				 version, request_content);
       char* f4m_ptr = get_f4m_ptr(content_path);
       //read each line of the request message
       while(((reader->buf)[0]) != '\r'){
-	line = read_one_line(reader);
-        get_request_header(header_indicators, oneline, request_headers);
+	read_one_line(reader, line);
+        get_request_header(header_indicators, line, request_headers);
       }
       //fill missing headers if there is any
       refill_miss_header(header_indicators, request_headers, hostname);
@@ -608,7 +614,7 @@ void handle_client_request(client_pool* pool, int browser_socket,
 	//send the message to the server
 	fd_set write_set;
 	FD_ZERO(&write_set);
-	select(sever_socket + 1, NULL, &write_set, NULL, NULL);
+	select(server_socket + 1, NULL, &write_set, NULL, NULL);
 	if(FD_ISSET(server_socket, &write_set)){
 	  char message[MAX_LINE];
 	  strcpy(message, request_content);
@@ -642,7 +648,7 @@ void handle_client_request(client_pool* pool, int browser_socket,
 	      //to get the bit rates
 	      read_io* reader_response = init_read_io(response);
 	      while((reader_response->buf)[0] != '\r'){
-		read_one_line(reader_response);
+		read_one_line(reader_response, line);
 	      }
 
 	      //get the buf pointer to the content message
@@ -661,15 +667,17 @@ void handle_client_request(client_pool* pool, int browser_socket,
 		int lowest_bitrate = get_lowest_bit_rate(myclient);
 		myclient->current_bitrate = lowest_bitrate;
 		//need to fetch the nolist f4m file
-		char* nolist_f4mpath = get_path_f4m_nolist(content_path);
-                first_request_line_combine(method, nolist_f4mpath,
+		int new_length = strlen(content_path) + NO_LIST_SIZE;
+		char new_request[new_length + 1];
+		get_path_f4m_nolist(content_path, new_request);
+                first_request_line_combine(method, new_request,
 					   version, request_content);
 		//close the f4m file
-		fclose("manifest.f4m");
+		fclose(f4mfile);
 		//recombine the message and send to server
 		fd_set write_set;
 		FD_ZERO(&write_set);
-		select(sever_socket + 1, NULL, &write_set, NULL, NULL);
+		select(server_socket + 1, NULL, &write_set, NULL, NULL);
 		if(FD_ISSET(server_socket, &write_set)){
 		  char message[MAX_LINE];
 		  strcpy(message, request_content);
@@ -693,7 +701,7 @@ void handle_client_request(client_pool* pool, int browser_socket,
 		  select(server_socket + 1, &read_set, NULL, NULL, NULL);
 		  if(FD_ISSET(server_socket, &read_set)){
 		    char* second_response = malloc(BUF_SIZE);
-		    int cout = 1;
+		    int count = 1;
                     second_response = read_response_from_server(server_socket, 
 								second_response,
 								&count);
@@ -720,16 +728,16 @@ void handle_client_request(client_pool* pool, int browser_socket,
 		else{
 		  close_socket(server_socket);
 		  free(response);
-		  free(reader_response)
+		  free(reader_response);
 		  fprintf(stderr, 
-			  "select returns but socket server is not ready to \
+                          "select returns but socket server is not ready to \
                           write\n");
 		  exit(EXIT_FAILURE);
 		}
 	      }
 	    }
 	    else{
-	      close_socket(serve_socket);
+	      close_socket(server_socket);
 	      fprintf(stderr, 
 		      "select returns but socket server is not ready to read\n");
 	      exit(EXIT_FAILURE);
@@ -795,9 +803,9 @@ void handle_client_request(client_pool* pool, int browser_socket,
 	    }
 	    //get the chunk size by parsing the response
 	    read_io* reader_response = init_read_io(response);
-	    char* line = read_one_line(reader_response);
+	    read_one_line(reader_response, line);
 	    while(strstr(line, "Content-Length") == NULL){
-	      line = read_one_line(reader_response);
+	      read_one_line(reader_response, line);
 	    }
 	    //get the chunk size
 	    int chunk_size = get_chunk_length(line);
@@ -861,7 +869,7 @@ void handle_client_request(client_pool* pool, int browser_socket,
 
 //helper function to set up a connection with the content server
 //with specified IP address and port number
-int connect_server(char* ip, char* fake_ip, char* port){
+int connect_server(char* ip, char* fake_ip, int server_port){
   int server_socket;
   struct addrinfo hints;
   struct addrinfo* servinfo;
@@ -876,7 +884,10 @@ int connect_server(char* ip, char* fake_ip, char* port){
   hints.ai_socktype = SOCK_STREAM;
   hints.ai_flags = 0;
   hints.ai_protocol = 0;
-  result1 = getaddrinfo(ip, port, &hints, &servinfo);
+  //convert the server port to a string
+  char str[15];
+  sprintf(str, "%d", server_port);
+  result1 = getaddrinfo(ip, str, &hints, &servinfo);
   result2 = getaddrinfo(fake_ip, "0", &hints, &localinfo);
   if(result1 != 0){
     //error code
@@ -944,7 +955,7 @@ int connect_browser(char* listen_port){
   hints.ai_family = AF_UNSPEC;
   hints.ai_socktype = SOCK_STREAM;
   hints.ai_flags = AI_PASSIVE;
-  result = getaddrinfo(NULL, listen_port, &hints, %servinfo);
+  result = getaddrinfo(NULL, listen_port, &hints, &servinfo);
   if(result != 0){
     fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(result));
     exit(1);
@@ -977,7 +988,7 @@ int connect_browser(char* listen_port){
 
 void free_clients(client_pool* pool){
   int index = 0;
-  client* myclients[FD_SETSIZE] = pool->clients;
+  client** myclients = pool->clients;
   for(index = 0; index < FD_SETSIZE; index++){
     client* myclient = myclients[index];
     free(myclient->bitrates);
@@ -994,6 +1005,7 @@ client* init_client(int client_fd){
   myclient->num_bitrate_options = 0;
   myclient->bitrate_capacity = START_SIZE;
   myclient->bitrates = malloc(START_SIZE * sizeof(int));
+  int index;
   for(index = 0; index < START_SIZE; index++){
     (myclient->bitrates)[index] = -1;
   }
@@ -1026,7 +1038,7 @@ void connectClient_add(int conn_fd, client_pool* pool){
 
       //update max fd and max index
       if(itr > (pool->read_index_max)){
-	pool->index_max = itr;
+	pool->read_index_max = itr;
       }
 
       if(conn_fd > (pool->fd_max)){

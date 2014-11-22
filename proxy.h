@@ -1,6 +1,7 @@
 /*
  *Yi Shi andrew id: yishi
  */
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -37,18 +38,10 @@ static const char *accept_encoding_hdr = "Accept-Encoding: gzip, deflate\r\n";
 //define additional header fields
 static const char *connection = "Connection: close\r\n";
 static const char *proxy_connection = "Proxy-Connection: close\r\n";
-FILE* log;
+FILE* mylog;
 int num_requests;
 int sum_throughput;
-//define client pool
-typedef struct{
-  int fd_max;
-  fd_set read_set;
-  fd_set read_readys;
-  int read_num_ready;
-  int read_index_max;
-  client* clients[FD_SETSIZE];
-}client_pool;
+
 
 //define client
 typedef struct {
@@ -61,6 +54,18 @@ typedef struct {
   int current_bitrate;
 }client;
 
+//define client pool
+typedef struct{
+  int fd_max;
+  fd_set read_set;
+  fd_set read_readys;
+  int read_num_ready;
+  int read_index_max;
+  client* clients[FD_SETSIZE];
+}client_pool;
+
+
+
 //define an read_io object to help read a buffer
 typedef struct {
   char* buf;
@@ -69,9 +74,9 @@ typedef struct {
 //function declarations
 read_io* init_read_io(char* given_content);
 void free_reader(read_io* reader);
-char* read_one_line(read_io* reader);
+void read_one_line(read_io* reader, char* one_line);
 int get_chunk_length(char* line);
-char* get_path_f4m_nolist(char* f4m_path);
+void get_path_f4m_nolist(char* f4m_path, char* new_request);
 void update_bitrate_chunk_request(char* chunk_path, int new_bitrate);
 int get_hostname_len(char* uri);
 void get_host_name(char* hostname_raw, char* hostname);
@@ -100,8 +105,8 @@ int get_best_bitrate(client* myclient, double throughput);
 int initLogFile(char* logFileName);
 void logger(const char* format, ...);
 void handle_client_request(client_pool* pool, int browser_socket,
-			   char* ip, char* fake_ip, float alpha, time_t epoch);
-int connect_server(char* ip, char* fake_ip, char* port);
+			   char* ip, char* fake_ip, float alpha, time_t epoch, char* logName);
+int connect_server(char* ip, char* fake_ip, int port);
 int connect_browser(char* listen_port);
 void free_clients(client_pool* pool);
 client* init_client(int client_fd);
